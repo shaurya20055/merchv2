@@ -1,15 +1,10 @@
-// src/routes/api/orders/+server.ts
+
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from '@sveltejs/kit';
-// Import the regular client for database operations
 import { supabase } from '$lib/supabaseClient';
-// --- NEW: Import tools to create a special admin client ---
-import { createClient } from '@supabase/supabase-js';
-import { env } from '$env/dynamic/private';
-// -----------------------------------------------------------
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, fetch }) => {
   try {
     const orderDetails = await request.json();
     const { 
@@ -28,8 +23,8 @@ export const POST: RequestHandler = async ({ request }) => {
       return json({ error: 'Missing required order details' }, { status: 400 });
     }
 
-    // 1. Save order to the database using the regular client
-    const { data, error } = await supabase
+    // 1. Save order to the database
+    const { data: orderData, error } = await supabase
       .from('orders')
       .insert([
         { 
@@ -45,35 +40,34 @@ export const POST: RequestHandler = async ({ request }) => {
           include_ml_club_logo: include_ml_club_logo
         },
       ])
-      .select();
+      .select()
+      .single(); 
 
     if (error) {
       console.error('Supabase insert error:', error);
       throw new Error('Failed to save order to the database.');
     }
 
-    // 2. --- MODIFIED: Invoke the Edge Function using the admin client ---
-    if (data) {
-      // Create a new admin client with the service role key to get permissions
-      const supabaseAdmin = createClient(
-        'https://qxuoklwlejtcgjugdkpb.supabase.co', // Your Supabase project URL
-        env.SUPABASE_SERVICE_ROLE_KEY
-      );
+   
+    if (orderData) {
+      console.log('Order saved. Attempting to send confirmation email...');
       
-      console.log('Order saved successfully. Attempting to invoke email function...');
-      const { error: invokeError } = await supabaseAdmin.functions.invoke('send-order-confirmation', {
-        body: { orderDetails },
+      
+      const emailResponse = await fetch('/api/send-email', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ orderDetails: { ...orderDetails, id: orderData.id } })
       });
-
-      if (invokeError) {
-        console.error('Error invoking email function:', invokeError);
+      
+      if (!emailResponse.ok) {
+        console.error('Failed to send confirmation email.');
       } else {
-        console.log('Email function invoked successfully.');
+        console.log('Confirmation email sent successfully.');
       }
     }
-    // ----------------------------------------------------------------------
+   
 
-    return json({ success: true, order: data });
+    return json({ success: true, order: orderData });
 
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred';
